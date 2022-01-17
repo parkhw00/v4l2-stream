@@ -11,6 +11,8 @@ typedef struct
   GstElement *pipeline;
   GstElement *v4l2src;
   GstElement *capsfilter1;
+  GstElement *videorate;
+  GstElement *capsfilter1_2;
   GstElement *jpegdec;
   GstElement *queue1;
   GstElement *h264enc;
@@ -28,7 +30,7 @@ static GstFlowReturn new_frame(GstElement *sink, AppGstElements *elements)
   GstSample *sample;
 
   g_signal_emit_by_name(sink, "pull-sample", &sample);
-  
+
   if (sample)
   {
     GstBuffer *buffer = gst_sample_get_buffer( sample );
@@ -74,30 +76,69 @@ int launch_pipeline(
     )
 {
   elements->v4l2src = gst_element_factory_make("v4l2src", NULL);
+  if (!elements->v4l2src)
+    g_printerr ("no v4l2src\n");
 
   elements->capsfilter1 = gst_element_factory_make("capsfilter", NULL);
+  if (!elements->capsfilter1)
+    g_printerr ("no capsfilter\n");
+
+  elements->videorate = gst_element_factory_make("videorate", NULL);
+  if (!elements->videorate)
+    g_printerr ("no videorate\n");
+
+  elements->capsfilter1_2 = gst_element_factory_make("capsfilter", NULL);
+  if (!elements->capsfilter1)
+    g_printerr ("no capsfilter\n");
 
   elements->jpegdec = gst_element_factory_make((jpegdec_vaapi) ? "vaapijpegdec" : "jpegdec", NULL);
+  if (!elements->jpegdec)
+    g_printerr ("no jpegdec\n");
 
   elements->queue1 = gst_element_factory_make("queue", NULL);
+  if (!elements->queue1)
+    g_printerr ("no queue\n");
 
   elements->h264enc = gst_element_factory_make((h264enc_vaapi) ? "vaapih264enc" : "x264enc", NULL);
+  if (!elements->h264enc)
+    g_printerr ("no h264enc\n");
 
   elements->queue2 = gst_element_factory_make("queue", NULL);
+  if (!elements->queue2)
+    g_printerr ("no queue\n");
 
-  if (h264parse) elements->h264parse = gst_element_factory_make("h264parse", NULL);
+  if (h264parse) {
+    elements->h264parse = gst_element_factory_make("h264parse", NULL);
+    if (!elements->h264parse)
+      g_printerr ("no h264parse\n");
+  }
 
   elements->capsfilter2 = gst_element_factory_make("capsfilter", NULL);
+  if (!elements->capsfilter2)
+    g_printerr ("no capsfilter\n");
 
   elements->appsink = gst_element_factory_make("appsink", NULL);
+  if (!elements->appsink)
+    g_printerr ("no appsink\n");
 
   char pipeline_name[32];
   sprintf(pipeline_name, "pipeline%d", elements->id);
   elements->pipeline = gst_pipeline_new(pipeline_name);
 
-  if (!elements->pipeline || !elements->v4l2src || !elements->capsfilter1 || !elements->jpegdec || !elements->queue1 || !elements->h264enc || !elements->queue2 || (h264parse && !elements->h264parse) || !elements->capsfilter2 || !elements->appsink)
+  if (!elements->pipeline ||
+      !elements->v4l2src ||
+      !elements->capsfilter1 ||
+      !elements->videorate ||
+      !elements->capsfilter1_2 ||
+      !elements->jpegdec ||
+      !elements->queue1 ||
+      !elements->h264enc ||
+      !elements->queue2 || (h264parse && !elements->h264parse) ||
+      !elements->capsfilter2 ||
+      !elements->appsink)
   {
     g_printerr("Not all elements could be created.\n");
+    exit (1);
     return 1;
   }
 
@@ -107,43 +148,80 @@ int launch_pipeline(
     g_object_set(elements->h264enc, "tune", flag_zerolatency, NULL);
   }
   g_object_set(elements->v4l2src, "do-timestamp", TRUE, NULL);
-  
+
   if (video_device != NULL)
     g_object_set(elements->v4l2src, "device", video_device, NULL);
 
   g_object_set(elements->capsfilter1, "caps", gst_caps_new_simple(
-    "image/jpeg", 
-    "width", G_TYPE_INT, width, 
-    "height", G_TYPE_INT, height, 
-    "framerate", GST_TYPE_FRACTION, framerate, 1, 
+    "image/jpeg",
+    "width", G_TYPE_INT, width,
+    "height", G_TYPE_INT, height,
     NULL), NULL);
-  
+
+  g_object_set(elements->capsfilter1_2, "caps", gst_caps_new_simple(
+    "image/jpeg",
+    "width", G_TYPE_INT, width,
+    "height", G_TYPE_INT, height,
+    "framerate", GST_TYPE_FRACTION, framerate, 1,
+    NULL), NULL);
+
   g_object_set(elements->capsfilter2, "caps", gst_caps_new_simple(
-    "video/x-h264", 
-    "stream-format", G_TYPE_STRING, "byte-stream", 
-    "alignment", G_TYPE_STRING, "au", 
+    "video/x-h264",
+    "stream-format", G_TYPE_STRING, "byte-stream",
+    "alignment", G_TYPE_STRING, "au",
     "profile", G_TYPE_STRING, "constrained-baseline",
     NULL), NULL);
 
-  g_object_set(elements->appsink, 
-    "emit-signals", TRUE, 
-    "sync", FALSE, 
-    "drop", TRUE, 
+  g_object_set(elements->appsink,
+    "emit-signals", TRUE,
+    "sync", FALSE,
+    "drop", TRUE,
     "max-buffers", 2,
     NULL);
-  
+
   g_signal_connect(elements->appsink, "new-sample", G_CALLBACK(new_frame), elements);
 
-  gst_bin_add_many(GST_BIN(elements->pipeline), elements->v4l2src, elements->capsfilter1, elements->jpegdec, elements->queue1, elements->h264enc, elements->queue2, elements->capsfilter2, elements->appsink, NULL);
+  gst_bin_add_many(GST_BIN(elements->pipeline),
+      elements->v4l2src,
+      elements->capsfilter1,
+      elements->videorate,
+      elements->capsfilter1_2,
+      elements->jpegdec,
+      elements->queue1,
+      elements->h264enc,
+      elements->queue2,
+      elements->capsfilter2,
+      elements->appsink,
+      NULL);
 
   gboolean link_ret;
 
   if (h264parse) {
     gst_bin_add(GST_BIN(elements->pipeline), elements->h264parse);
-    link_ret = gst_element_link_many(elements->v4l2src, elements->capsfilter1, elements->jpegdec, elements->queue1, elements->h264enc, elements->queue2, elements->h264parse, elements->capsfilter2, elements->appsink, NULL);
+    link_ret = gst_element_link_many(elements->v4l2src,
+        elements->capsfilter1,
+        elements->videorate,
+        elements->capsfilter1_2,
+        elements->jpegdec,
+        elements->queue1,
+        elements->h264enc,
+        elements->queue2,
+        elements->h264parse,
+        elements->capsfilter2,
+        elements->appsink,
+        NULL);
   }
   else {
-    link_ret = gst_element_link_many(elements->v4l2src, elements->capsfilter1, elements->jpegdec, elements->queue1, elements->h264enc, elements->capsfilter2, elements->appsink, NULL);
+    link_ret = gst_element_link_many(elements->v4l2src,
+        elements->capsfilter1,
+        elements->videorate,
+        elements->capsfilter1_2,
+        elements->jpegdec,
+        elements->queue1,
+        elements->h264enc,
+        elements->capsfilter2,
+        elements->appsink,
+        NULL);
   }
 
   if (link_ret != TRUE) {
