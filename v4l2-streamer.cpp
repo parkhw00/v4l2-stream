@@ -68,8 +68,8 @@ int launch_pipeline(
     int height,
     int framerate,
     int bitrate = 0,
-    bool jpegdec_vaapi = true,
-    bool h264enc_vaapi = true,
+    bool jpegdec_vaapi = false,
+    bool h264enc_vaapi = false,
     bool h264parse = true
     )
 {
@@ -102,6 +102,10 @@ int launch_pipeline(
   }
 
   g_object_set(elements->h264enc, "bitrate", bitrate, "keyframe-period", 300, NULL);
+  {
+    int flag_zerolatency = 0x4;
+    g_object_set(elements->h264enc, "tune", flag_zerolatency, NULL);
+  }
   g_object_set(elements->v4l2src, "do-timestamp", TRUE, NULL);
   
   if (video_device != NULL)
@@ -171,6 +175,49 @@ int launch_pipeline(
 
 int main(int argc, char *argv[])
 {
+  char *opt_device = NULL;
+  int opt_width = 1280;
+  int opt_height = 720;
+  int opt_framerate = 30;
+  int opt_port = 8003;
+
+  while (1) {
+    int opt;
+    opt = getopt (argc, argv, "?d:w:h:f:p:");
+    if (opt < 0)
+      break;
+
+    switch (opt) {
+      default:
+      case '?':
+        fprintf (stderr,
+            " $ v4l2-streamer <options>\n"
+            "options:\n"
+            " -d <devname>        : v4l2 device name\n"
+            " -w <width>          : width of captured screen\n"
+            " -h <height>         : height of captured screen\n"
+            " -f <framerate>      : framerate\n"
+            " -p <server-port>    : server port number\n");
+        exit (1);
+
+      case 'd':
+        opt_device = optarg;
+        break;
+
+      case 'w':
+        opt_width = atoi (optarg);
+        break;
+
+      case 'h':
+        opt_height = atoi (optarg);
+        break;
+
+      case 'f':
+        opt_framerate = atoi (optarg);
+        break;
+    }
+  }
+
   gst_init (&argc, &argv);
   AppGstElements elements;
   memset(&elements, 0, sizeof(AppGstElements));
@@ -193,10 +240,10 @@ int main(int argc, char *argv[])
   });
   std::thread th([&]() {
     g_print("Server started\n");
-    elements.server->run(8003);
+    elements.server->run(opt_port);
   });
 
-  int ret = launch_pipeline(&elements, NULL, 1280, 720, 30);
+  int ret = launch_pipeline(&elements, opt_device, opt_width, opt_height, opt_framerate);
   g_print("launch_pipeline returned %d\n", ret);
   th.join();
 
