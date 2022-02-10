@@ -1,0 +1,10 @@
+[Unit]
+Description=v4l2 streamer daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/v4l2-streamer -d /dev/video0 -w 1280 -h 720 -f 30
+
+#[Install]
+#WantedBy=multi-user.target
