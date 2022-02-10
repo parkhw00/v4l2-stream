@@ -30,7 +30,7 @@ $ make
 Start stream server with
 
 ```
-$ ./v4l2-streamer 
+$ ./v4l2-streamer -d /dev/video0 -w 1280 -h 720 -f 30
 ```
 
 and start Web server with
