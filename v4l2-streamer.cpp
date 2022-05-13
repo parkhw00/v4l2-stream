@@ -1,3 +1,13 @@
+
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <signal.h>
+
 #include <functional>
 #include <thread>
 #include <gst/gst.h>
@@ -236,7 +246,7 @@ int launch_pipeline(
   gst_object_unref (bus);
 
   /* Start playing the pipeline */
-  g_print("Pipeline is ready\n");
+  g_print("Pipeline is ready for device %s\n", video_device);
   //gst_element_set_state (elements->pipeline, GST_STATE_PLAYING);
   elements->ready = true;
 
@@ -250,18 +260,47 @@ int launch_pipeline(
 }
 
 
+static pid_t *childs;
+static int child_num;
+
+static void on_signal(int sig)
+{
+  fprintf(stderr, "signal %d\n", sig);
+  if (sig == SIGCHLD)
+  {
+    while(1)
+    {
+      pid_t p;
+
+      p = waitpid (-1, NULL, WNOHANG);
+      if (p == (pid_t)-1 || p == 0)
+        break;
+      fprintf(stderr, "child %d terminated.\n", (int)p);
+    }
+    return;
+  }
+
+  if (sig == SIGINT)
+  {
+    int i;
+    for (i=0; i<child_num; i++)
+      kill (childs[i], SIGINT);
+    return;
+  }
+}
 
 int main(int argc, char *argv[])
 {
-  char *opt_device = NULL;
+  char *opt_device = (char*)"/dev/video%d";
+  int opt_devcount = 2;
   int opt_width = 1280;
   int opt_height = 720;
-  int opt_framerate = 30;
-  int opt_port = 8003;
+  int opt_framerate = 20;
+  int opt_port = 8000;
 
   while (1) {
     int opt;
-    opt = getopt (argc, argv, "?d:w:h:f:p:");
+    opt = getopt (argc, argv, "?d:n:w:h:f:p:");
     if (opt < 0)
       break;
 
@@ -272,6 +311,8 @@ int main(int argc, char *argv[])
             " $ v4l2-streamer <options>\n"
             "options:\n"
             " -d <devname>        : v4l2 device name\n"
+            " -n <devcount>       : v4l2 device count to monitor\n"
+            "                       non-zero for fork server\n"
             " -w <width>          : width of captured screen\n"
             " -h <height>         : height of captured screen\n"
             " -f <framerate>      : framerate\n"
@@ -280,6 +321,10 @@ int main(int argc, char *argv[])
 
       case 'd':
         opt_device = optarg;
+        break;
+
+      case 'n':
+        opt_devcount = atoi (optarg);
         break;
 
       case 'w':
@@ -293,16 +338,90 @@ int main(int argc, char *argv[])
       case 'f':
         opt_framerate = atoi (optarg);
         break;
+
+      case 'p':
+        opt_port = atoi (optarg);
+        break;
     }
   }
 
+  fprintf(stderr, "... %d\n", opt_devcount);
+  if (opt_devcount > 0)
+  {
+    fprintf(stderr, "fork server..\n");
+
+    signal(SIGCHLD, on_signal);
+    signal(SIGINT, on_signal);
+
+    int i;
+    for (i=0; i<opt_devcount; i++)
+    {
+      pid_t pid;
+      char *devname, *port;
+
+      asprintf (&devname, opt_device, i);
+      asprintf (&port, "%d", opt_port + i);
+
+      pid = fork();
+      if (pid == 0)
+      {
+        char *w, *h, *f;
+
+        fprintf(stderr, "child for %s..\n", devname);
+        asprintf (&w, "%d", opt_width);
+        asprintf (&h, "%d", opt_height);
+        asprintf (&f, "%d", opt_framerate);
+
+        char * const cargv[] =
+        {
+          argv[0],
+          "-d", devname,
+          "-n", "0",
+          "-w", w,
+          "-h", h,
+          "-f", f,
+          "-p", port,
+          NULL,
+        };
+
+        execvp (argv[0], cargv);
+      }
+
+      childs = (pid_t*)realloc(childs, sizeof(childs[0]) * (child_num+1));
+      childs[child_num] = pid;
+      child_num ++;
+
+      fprintf (stderr, "child %d for device \"%s\", port %s\n", (int)pid, devname, port);
+
+      free (devname);
+      free (port);
+    }
+
+    fprintf(stderr, "wait child..\n");
+    while(1)
+    {
+      pid_t pid;
+      pid = wait(NULL);
+      if (pid == (pid_t)-1)
+      {
+        fprintf(stderr, "wait(), %d. %s\n", (int)pid, strerror(errno));
+        break;
+      }
+    }
+    fprintf(stderr, "fork server terminate..\n");
+
+    return 0;
+  }
+
+  fprintf(stderr, "wait on port %d for device %s\n", opt_port, opt_device);
   gst_init (&argc, &argv);
+
   AppGstElements elements;
   memset(&elements, 0, sizeof(AppGstElements));
 
   elements.server = new BroadcastServer([&](BroadcastServerEvent e) {
     if (!elements.ready) {
-      g_printerr("Pipeline is not ready\n");
+      g_printerr("Pipeline is not ready for device %s, port %d\n", opt_device, opt_port);
       return;
     }
     switch (e) {
@@ -312,7 +431,7 @@ int main(int argc, char *argv[])
       break;
     case BroadcastServerEvent::LastClose:
       g_print("Streaming paused\n");
-      gst_element_set_state (elements.pipeline, GST_STATE_PAUSED);
+      gst_element_set_state (elements.pipeline, GST_STATE_READY);
       break;
     }
   });
@@ -323,7 +442,11 @@ int main(int argc, char *argv[])
 
   int ret = launch_pipeline(&elements, opt_device, opt_width, opt_height, opt_framerate);
   g_print("launch_pipeline returned %d\n", ret);
+  exit(1);
   th.join();
+  g_print("done.\n");
 
   return 0;
 }
+
+/* vim: set sw=2 et: */

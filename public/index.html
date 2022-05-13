@@ -4,22 +4,32 @@
   <link type="text/css" href="screen.css" rel="stylesheet" />
 </head>
 
-<body onload="load()">
+<body onload="load(0)">
   <script type="text/javascript" src="Decoder.js"></script>
   <script type="text/javascript" src="YUVCanvas.js"></script>
   <script type="text/javascript" src="Player.js"></script>
 
   <script type="text/javascript">
     var nframes = 0, fps = 0, bitrate = 0;
-    function load() {
-      var broadway = new Player({
+    var broadway;
+    var fpsUpdate;
+    var socket;
+    function load(devnum) {
+      console.log("devnum : " + devnum);
+      console.log("broadway : " + broadway);
+
+      broadway = new Player({
         useWorker: true,
         reuseMemory: true,
         webgl: true
       });
       document.getElementById("player").appendChild(broadway.canvas);
 
-      var socket = new WebSocket("ws://" + window.location.hostname + ":8003");
+      var port = 8000 + Number(devnum);
+      var wsurl = "ws://" + window.location.hostname + ":" + String(port);
+      console.log("ws url : " + wsurl);
+      delete socket;
+      socket = new WebSocket(wsurl);
 
       socket.onmessage = function (event) {
         event.data.arrayBuffer().then(buffer => {
@@ -35,7 +45,8 @@
         //console.log(width);
       };
 
-      setInterval(function () {
+      clearInterval(fpsUpdate);
+      fpsUpdate = setInterval(function () {
         console.log(`FPS = ${fps}`);
         document.getElementById("fps").innerText = fps;
         document.getElementById("frames").innerText = nframes;
@@ -44,16 +55,25 @@
         fps = 0;
       }, 1000);
     }
+
+    function changeDevice() {
+      var sel = document.getElementById("device-select");
+      var devnum = sel.options[sel.selectedIndex].value;
+      console.log("selected. " + devnum);
+
+      load(devnum);
+    }
   </script>
+  <select id="device-select" name="device" onchange="changeDevice()">
+    <option value="0">/dev/video0</option>
+    <option value="1">/dev/video1</option>
+    <option value="2">/dev/video2</option>
+    <option value="3">/dev/video3</option>
+  </select>
+
   <div id="player"></div>
-  <div id="statistics">
-    <h2>Statistics</h2>
-    <table>
-      <tr><td>FPS</td><td id="fps"></td></tr>
-      <tr><td>Frames</td><td id="frames"></td></tr>
-      <tr><td>Bitrate (kbps)</td><td id="bitrate"></td></tr>
-    </table>
-  </div>
+  <p>Statistics. FPS <a id="fps"></a>, Frames <a id="frames"></a>, Bitrate <a id="bitrate"></a>(kbps)</p>
+  <p>Read more on <a href="https://github.com/parkhw00/v4l2-stream">source code</a>.</p>
 
   <!-- <canvas id='canvas' width="640" height="100" style="background-color: #333333;"></canvas> -->
 
